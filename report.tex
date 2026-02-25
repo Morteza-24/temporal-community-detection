@@ -1,0 +1,577 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{multirow}
+\usepackage{caption}
+
+\geometry{margin=1in}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    language=Python,
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+}
+
+\title{\textbf{Temporal Community Detection: A Comparative Study of NMF-based and GNN-based Approaches}}
+\author{Morteza Ziabakhsh\\
+\texttt{morteza24mail@protonmail.com}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report presents a comprehensive implementation and comparative analysis of two temporal community detection approaches applied to dynamic networks. The first model, TCDA-NE (Temporal Community Detection and Analysis with Network Embeddings), is the baseline model I used. It is a novel algorithm that combines evolutionary clustering with convex non-negative matrix factorization (Convex-NMF). This implementation follows the research paper by Yuan et al. (2025) and represents the first publicly available implementation of this method, as no official implementation was provided by the original authors (I had to implement it myself). The second model, OverlappingGNN, is the result of my efforts to improve the baseline. It leverages Graph Neural Networks (GNNs) for overlapping community detection, based on the NOCD (Overlapping Community Detection with Graph Neural Networks) framework by Shchur et al. Both models were evaluated on the Enron email corpus, a real-world temporal network dataset. My evaluation employs multiple metrics including modularity, link prediction accuracy (AUC and AP), and temporal smoothness measures (consecutive NMI and F1). The results reveal an interesting trade-off: while TCDA-NE excels in temporal smoothness due to its explicit temporal regularization term, OverlappingGNN achieves superior community quality as measured by modularity and link prediction performance. This report provides detailed implementation descriptions, experimental methodology, and comprehensive analysis of the comparative results. All implementations are availabe at: \url{https://github.com/Morteza-24/temporal-community-detection}.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{Introduction}
+%==============================================================================
+
+\subsection{Background and Motivation}
+
+Community detection in networks is a fundamental problem in network science with applications spanning social network analysis, biological systems, recommendation systems, and organizational studies. Traditional community detection methods treat networks as static entities, ignoring the temporal dynamics inherent in real-world systems. However, many real-world networks are inherently dynamic, with nodes and edges appearing, disappearing, and evolving over time. This temporal dimension introduces both challenges and opportunities for community detection.
+
+Temporal community detection (TCD) aims to identify communities in dynamic networks while accounting for their evolutionary nature. The key challenges include:
+\begin{itemize}
+    \item \textbf{Temporal Smoothness}: Communities should evolve smoothly over time, avoiding abrupt changes that are unlikely in real systems.
+    \item \textbf{Community Quality}: Detected communities should be meaningful, with strong internal connections and weak external connections.
+    \item \textbf{Overlapping Structure}: Real communities often overlap, with nodes belonging to multiple communities simultaneously.
+    \item \textbf{Scalability}: Algorithms should handle large-scale temporal networks efficiently.
+\end{itemize}
+
+\subsection{Research Objectives}
+
+This project implements and compares two distinct approaches to temporal community detection:
+
+\begin{enumerate}
+    \item \textbf{TCDA-NE}: A matrix factorization-based approach that explicitly models temporal smoothness through evolutionary clustering. This implementation is based on the paper ``Temporal Community Detection and Analysis with Network Embeddings'' by Yuan et al. (2025). Notably, the original paper did not provide an official implementation, making this the first publicly available implementation of the TCDA-NE algorithm.
+
+    \item \textbf{OverlappingGNN}: A neural network-based approach using Graph Neural Networks for overlapping community detection. This approach applies the NOCD framework by Shchur et al. to each temporal snapshot independently, enabling the detection of overlapping community structures.
+\end{enumerate}
+
+\subsection{Contributions}
+
+The main contributions of this work include:
+\begin{itemize}
+    \item First publicly available implementation of the TCDA-NE algorithm
+    \item Adaptation of the NOCD framework for temporal community detection
+    \item Comprehensive evaluation framework including modularity and link prediction metrics (not included in the original TCDA-NE paper)
+    \item Fair comparison of matrix factorization and GNN-based approaches on a real-world dataset
+    \item Analysis of the trade-offs between temporal smoothness and community quality
+\end{itemize}
+
+%==============================================================================
+\section{Methodology}
+%==============================================================================
+
+\subsection{Problem Formulation}
+
+Given a temporal network represented as a sequence of snapshots $\{A^{(1)}, A^{(2)}, \ldots, A^{(T)}\}$, where $A^{(t)} \in \mathbb{R}^{N \times N}$ is the adjacency matrix at time $t$, the goal is to find community assignments $\{C^{(1)}, C^{(2)}, \ldots, C^{(T)}\}$ that:
+\begin{enumerate}
+    \item Maximize community quality within each snapshot
+    \item Maintain temporal smoothness between consecutive snapshots
+    \item Optionally, allow overlapping community memberships
+\end{enumerate}
+
+\subsection{TCDA-NE: Temporal Community Detection with Network Embeddings}
+\label{sec:tcda-ne}
+
+\subsubsection{Overview}
+
+TCDA-NE is a novel temporal community detection algorithm that combines evolutionary clustering with convex non-negative matrix factorization (Convex-NMF). The method innovatively integrates community structure into network embedding, preserving both microscopic details and community-level information in node representations while effectively capturing the evolutionary dynamics of networks.
+
+\subsubsection{Proximity Matrix Construction}
+
+A distinctive feature of TCDA-NE is its utilization of a common-neighbor similarity matrix, which significantly enhances the algorithm's ability to identify meaningful community structures in temporal networks. The proximity matrix $S$ combines first-order and second-order proximity:
+
+\begin{equation}
+    S = S^{(1)} + \eta \cdot S^{(2)}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $S^{(1)} = A$ is the first-order proximity (adjacency matrix)
+    \item $S^{(2)}$ is the second-order proximity based on cosine similarity of neighbor vectors:
+\end{itemize}
+
+\begin{equation}
+    S^{(2)}_{ij} = \frac{\mathbf{n}_i \cdot \mathbf{n}_j}{\|\mathbf{n}_i\| \|\mathbf{n}_j\|}
+\end{equation}
+
+where $\mathbf{n}_i$ is the neighbor vector of node $i$.
+
+\subsubsection{Convex-NMF Formulation}
+
+TCDA-NE uses Convex-NMF, which constrains the basis matrix $W$ to be a convex combination of data points. The factorization is formulated as:
+
+\begin{equation}
+    S \approx SWG^T
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $W \in \mathbb{R}^{N \times K}$ is the weight matrix (constrained to have rows summing to 1)
+    \item $G \in \mathbb{R}^{N \times K}$ is the community membership matrix
+    \item $K$ is the number of communities
+\end{itemize}
+
+\subsubsection{Evolutionary Clustering Objective}
+
+The objective function for snapshot $t$ incorporates temporal smoothness:
+
+\begin{equation}
+    \mathcal{L}^{(t)} = \|S^{(t)} - S^{(t)}W^{(t)}(G^{(t)})^T\|_F^2 + \alpha \|S^{(t-1)} - S^{(t-1)}W^{(t-1)}(G^{(t-1)})^T\|_F^2
+\end{equation}
+
+where $\alpha \in [0, 1]$ controls the trade-off between:
+\begin{itemize}
+    \item \textbf{Snapshot Quality}: How well the factorization reconstructs the current proximity matrix
+    \item \textbf{Temporal Smoothness}: How similar the current factorization is to the previous snapshot
+\end{itemize}
+
+\subsubsection{Multiplicative Update Rules}
+
+The optimization uses multiplicative update rules that guarantee non-negativity:
+
+\textbf{Update for W:}
+\begin{equation}
+    W \leftarrow W \odot \frac{S^T S G}{S^T S W G^T G}
+\end{equation}
+
+followed by row normalization: $\sum_j W_{ij} = 1$ for all $i$.
+
+\textbf{Update for G:}
+\begin{equation}
+    G \leftarrow G \odot \frac{S^T S W + \alpha S_{prev}^T S_{prev} W_{prev}}{G W^T S^T S W + \alpha G W_{prev}^T S_{prev}^T S_{prev} W_{prev}}
+\end{equation}
+
+where $\odot$ denotes element-wise multiplication.
+
+\subsubsection{Algorithm Summary}
+
+\begin{algorithm}[H]
+\caption{TCDA-NE Algorithm}
+\begin{algorithmic}[1]
+\REQUIRE Snapshots $\{A^{(1)}, \ldots, A^{(T)}\}$, number of communities $K$, temporal weight $\alpha$, proximity weight $\eta$
+\ENSURE Community assignments $\{C^{(1)}, \ldots, C^{(T)}\}$
+\FOR{$t = 1$ to $T$}
+    \STATE Compute proximity matrix $S^{(t)} = A^{(t)} + \eta \cdot S^{(2)}$
+    \STATE Initialize $W^{(t)}, G^{(t)}$ randomly
+    \REPEAT
+        \STATE Update $W^{(t)}$ using multiplicative rule
+        \STATE Update $G^{(t)}$ using multiplicative rule with temporal term (if $t > 1$)
+    \UNTIL{convergence}
+    \STATE $C^{(t)}_i = \arg\max_k G^{(t)}_{ik}$ for each node $i$
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Implementation Details}
+
+The implementation in \texttt{src/tcd/models/tcda\_ne/model.py} follows the exact formulation from the paper:
+
+\begin{itemize}
+    \item \textbf{Parameters}: 
+    \begin{itemize}
+        \item \texttt{num\_communities}: Number of communities $K$ (default: 20)
+        \item \texttt{alpha}: Temporal smoothness weight (default: 0.8, as recommended in the paper)
+        \item \texttt{eta}: First vs second-order proximity weight (default: 5.0, as recommended in the paper)
+        \item \texttt{max\_iter}: Maximum iterations per snapshot (default: 200)
+        \item \texttt{tol}: Convergence tolerance (default: $10^{-50}$)
+    \end{itemize}
+    \item \textbf{Initialization}: Random initialization for $W$ and $G$ matrices
+    \item \textbf{Convergence}: Based on relative change in objective function
+\end{itemize}
+
+\subsection{OverlappingGNN: GNN-based Overlapping Community Detection}
+\label{sec:overlapping-gnn}
+
+\subsubsection{Overview}
+
+The OverlappingGNN model was my idea to address two key limitations of TCDA-NE: (1) the assumption of non-overlapping communities. In real-world networks, nodes often belong to multiple communities simultaneously. (2) The lack of usage of stronger NN-based models. This model uses Graph Neural Networks to learn soft community memberships, allowing nodes to belong to multiple communities.
+
+The implementation is based on the NOCD (Overlapping Community Detection with Graph Neural Networks) framework by Shchur et al., which uses a simple yet effective architecture combining a GCN encoder with a Bernoulli decoder.
+
+\subsubsection{Architecture}
+
+The model consists of two main components:
+
+\textbf{1. GCN Encoder:}
+The encoder maps node features to community memberships:
+
+\begin{equation}
+    Z = \text{ReLU}(\text{GCN}(X, A))
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $X$ is the node feature matrix (identity matrix when no features are available)
+    \item $A$ is the normalized adjacency matrix
+    \item $Z \in \mathbb{R}^{N \times K}$ is the soft community membership matrix
+\end{itemize}
+
+The GCN layer computes:
+\begin{equation}
+    H^{(l+1)} = \sigma(\tilde{D}^{-1/2}\tilde{A}\tilde{D}^{-1/2} H^{(l)} W^{(l)})
+\end{equation}
+
+where $\tilde{A} = A + I$ is the adjacency matrix with self-loops and $\tilde{D}$ is the degree matrix of $\tilde{A}$.
+
+\textbf{2. Bernoulli Decoder (BerPo):}
+The decoder reconstructs the adjacency matrix from community memberships:
+
+\begin{equation}
+    P(A_{ij} = 1 | Z) = 1 - \exp(-(Z_i \cdot Z_j + \epsilon))
+\end{equation}
+
+where $\epsilon = -\log(1 - p_{edge})$ is a correction term based on the edge probability.
+
+\subsubsection{Loss Function}
+
+The model is trained to minimize the Bernoulli Poisson (BerPo) loss:
+
+\begin{equation}
+    \mathcal{L} = -\frac{1}{|E|}\sum_{(i,j) \in E} \log(1 - \exp(-\epsilon - Z_i \cdot Z_j)) + \frac{\lambda}{|E'|}\sum_{(i,j) \notin E} Z_i \cdot Z_j
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $E$ is the set of edges
+    \item $E'$ is the set of non-edges
+    \item $\lambda$ is a balancing parameter
+\end{itemize}
+
+\subsubsection{Temporal Application}
+
+For temporal community detection, the model is applied independently to each snapshot:
+
+\begin{algorithm}[H]
+\caption{OverlappingGNN for Temporal Networks}
+\begin{algorithmic}[1]
+\REQUIRE Snapshots $\{A^{(1)}, \ldots, A^{(T)}\}$, number of communities $K$
+\ENSURE Soft memberships $\{Z^{(1)}, \ldots, Z^{(T)}\}$
+\FOR{$t = 1$ to $T$}
+    \STATE Initialize GCN with random weights
+    \STATE Train on $A^{(t)}$ using BerPo loss with early stopping
+    \STATE $Z^{(t)} = \text{ReLU}(\text{GCN}(I, A^{(t)}))$
+    \STATE Normalize $Z^{(t)}$ to $[0, 1]$ range
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Implementation Details}
+
+The implementation in \texttt{src/tcd/models/overlapping\_gnn/model.py} includes:
+
+\begin{itemize}
+    \item \textbf{Parameters}:
+    \begin{itemize}
+        \item \texttt{num\_communities}: Number of communities $K$
+        \item \texttt{threshold}: Membership threshold for hard clustering (default: 0.5)
+        \item \texttt{hidden\_sizes}: Hidden layer dimensions (default: [128])
+        \item \texttt{max\_epochs}: Maximum training epochs (default: 500)
+        \item \texttt{dropout}: Dropout rate (default: 0.5)
+        \item \texttt{lr}: Learning rate (default: 0.001)
+    \end{itemize}
+    \item \textbf{Training}: Stochastic gradient descent with edge sampling
+    \item \textbf{Early Stopping}: Patience-based early stopping on validation loss
+\end{itemize}
+
+\subsection{Evaluation Metrics}
+\label{sec:metrics}
+
+A comprehensive evaluation framework was developed to assess both community quality and temporal properties. The original TCDA-NE paper only reported temporal smoothness metrics (NMI and F1), but we argue that community quality metrics are equally important. Therefore, we include modularity and link prediction metrics in our evaluation.
+
+\subsubsection{Community Quality Metrics}
+
+\textbf{1. Modularity:}
+Modularity measures the quality of community structure by comparing internal edge density to expected density under a null model:
+
+\begin{equation}
+    Q = \frac{1}{2m}\sum_{ij}\left[A_{ij} - \frac{k_i k_j}{2m}\right]\delta(c_i, c_j)
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $m$ is the total number of edges
+    \item $k_i$ is the degree of node $i$
+    \item $\delta(c_i, c_j) = 1$ if nodes $i$ and $j$ are in the same community
+\end{itemize}
+
+Higher modularity indicates better community structure with dense internal connections and sparse external connections.
+
+\textbf{2. Link Prediction (AUC and AP):}
+Link prediction measures the predictive power of community assignments. The intuition is that nodes in the same community are more likely to form edges. We use communities at time $t$ to predict edges at time $t+1$:
+
+\begin{itemize}
+    \item \textbf{AUC (Area Under ROC Curve)}: Measures the probability that a randomly chosen edge has a higher prediction score than a randomly chosen non-edge.
+    \item \textbf{AP (Average Precision)}: Summarizes the precision-recall curve and is more robust to class imbalance.
+\end{itemize}
+
+\subsubsection{Temporal Smoothness Metrics}
+
+\textbf{1. Consecutive NMI:}
+Normalized Mutual Information measures the similarity between community assignments at consecutive time steps:
+
+\begin{equation}
+    \text{NMI}(C^{(t)}, C^{(t+1)}) = \frac{2 \cdot I(C^{(t)}; C^{(t+1)})}{H(C^{(t)}) + H(C^{(t+1)})}
+\end{equation}
+
+where $I$ is mutual information and $H$ is entropy.
+
+\textbf{2. Consecutive F1:}
+F1 score with optimal matching measures community similarity using the Hungarian algorithm:
+
+\begin{equation}
+    F1 = \frac{2 \cdot \text{precision} \cdot \text{recall}}{\text{precision} + \text{recall}}
+\end{equation}
+
+where precision and recall are computed based on community overlap after optimal matching.
+
+%==============================================================================
+\section{Dataset}
+%==============================================================================
+
+\subsection{Enron Email Corpus}
+
+The Enron email corpus is a real-world dataset widely used for temporal network analysis. It contains emails exchanged among employees of the Enron Corporation before its collapse in 2001.
+
+\subsubsection{Dataset Characteristics}
+
+\begin{itemize}
+    \item \textbf{Nodes}: 150 employees (email addresses)
+    \item \textbf{Edges}: Email communications (sender $\rightarrow$ recipient)
+    \item \textbf{Time Span}: Approximately 2 years of email communications
+    \item \textbf{Temporal Resolution}: Monthly snapshots
+    \item \textbf{Network Type}: Directed (converted to undirected for community detection)
+\end{itemize}
+
+\subsubsection{Preprocessing Pipeline}
+
+The preprocessing pipeline in \texttt{scripts/preprocess\_enron.py} performs the following steps:
+
+\begin{enumerate}
+    \item \textbf{Email Parsing}: Extract sender, recipients, and timestamp from raw email files
+    \item \textbf{Node Mapping}: Create contiguous node IDs (0 to N-1) for all unique email addresses
+    \item \textbf{Edge Construction}: Build temporal edges (sender, recipient, timestamp)
+    \item \textbf{Snapshot Creation}: Convert continuous-time data to discrete monthly snapshots
+\end{enumerate}
+
+The processed data is stored in PyTorch Geometric's \texttt{TemporalData} format for efficient loading and manipulation.
+
+%==============================================================================
+\section{Experimental Setup}
+%==============================================================================
+
+\subsection{Implementation Details}
+
+\subsubsection{Software Stack}
+
+\begin{itemize}
+    \item \textbf{Language}: Python 3.x
+    \item \textbf{Deep Learning}: PyTorch, PyTorch Geometric
+    \item \textbf{Scientific Computing}: NumPy, SciPy, scikit-learn
+    \item \textbf{Graph Analysis}: NetworkX
+    \item \textbf{Temporal Graph Benchmark}: TGB (Temporal Graph Benchmark)
+\end{itemize}
+
+\subsubsection{Model Configurations}
+
+\textbf{TCDA-NE Configuration:}
+\begin{lstlisting}
+TCDA_PARAMS = {
+    "num_communities": 15,
+    "alpha": 0.8,        # temporal smoothness
+    "eta": 5.0,          # proximity weight
+    "max_iter": 200,
+    "random_state": 42
+}
+\end{lstlisting}
+
+\textbf{OverlappingGNN Configuration:}
+\begin{lstlisting}
+NOCD_PARAMS = {
+    "num_communities": 15,
+    "threshold": 0.5,
+    "max_epochs": 300,
+    "hidden_sizes": [128],
+    "random_state": 42
+}
+\end{lstlisting}
+
+\subsection{Experimental Procedure}
+
+The comparison script (\texttt{scripts/train\_and\_compare.py}) performs the following:
+
+\begin{enumerate}
+    \item Load the Enron dataset and create monthly snapshots
+    \item Train TCDA-NE on all snapshots
+    \item Train OverlappingGNN on all snapshots
+    \item Compute all evaluation metrics
+    \item Generate comparison tables
+\end{enumerate}
+
+%==============================================================================
+\section{Results}
+%==============================================================================
+
+\subsection{Performance Comparison}
+
+Table~\ref{tab:main_results} presents the main comparison results between TCDA-NE and OverlappingGNN on the Enron dataset.
+
+\begin{table}[H]
+\centering
+\caption{Final Fair Comparison Results (Higher = Better)}
+\label{tab:main_results}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Model} & \textbf{Avg Mod.} & \textbf{Link Pred. AUC} & \textbf{Link Pred. AP} & \textbf{Consec. NMI} & \textbf{Consec. F1} \\
+\midrule
+TCDA-NE & 0.1840 & 0.4882 & 0.5629 & 0.6500 & 0.6600 $\pm$ 0.1140 \\
+OverlappingGNN & 0.4226 & 0.7285 & 0.6897 & 0.3951 & 0.3609 $\pm$ 0.1293 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Analysis of Results}
+
+\subsubsection{Community Quality (Modularity and Link Prediction)}
+
+The OverlappingGNN model significantly outperforms TCDA-NE in terms of community quality:
+
+\begin{itemize}
+    \item \textbf{Modularity}: OverlappingGNN achieves 0.4226 compared to TCDA-NE's 0.1840, indicating that GNN-based communities have much stronger internal structure.
+    \item \textbf{Link Prediction AUC}: OverlappingGNN achieves 0.7285 vs. 0.4882, showing that its communities are more predictive of future connections.
+    \item \textbf{Link Prediction AP}: OverlappingGNN achieves 0.6897 vs. 0.5629.
+\end{itemize}
+
+These results demonstrate that the GNN-based approach learns more meaningful community structures that better reflect the underlying network topology.
+
+\subsubsection{Temporal Smoothness (Consecutive NMI and F1)}
+
+TCDA-NE excels in temporal smoothness metrics:
+
+\begin{itemize}
+    \item \textbf{Consecutive NMI}: TCDA-NE achieves 0.6500 compared to OverlappingGNN's 0.3951.
+    \item \textbf{Consecutive F1}: TCDA-NE achieves 0.6600 $\pm$ 0.1140 compared to OverlappingGNN's 0.3609 $\pm$ 0.1293.
+\end{itemize}
+
+This is expected because TCDA-NE has an explicit temporal smoothness term in its objective function ($\alpha$ parameter), which directly penalizes large changes between consecutive snapshots. In contrast, OverlappingGNN treats each snapshot independently without any temporal regularization.
+
+\subsubsection{Computational Efficiency}
+
+TCDA-NE is significantly faster:
+\begin{itemize}
+    \item TCDA-NE: 4.3 seconds
+    \item OverlappingGNN: 115.2 seconds
+\end{itemize}
+
+The matrix factorization approach is computationally efficient due to its closed-form update rules and lack of gradient computation. The GNN approach requires training a neural network for each snapshot, which is more computationally intensive.
+
+\subsection{Key Takeaways}
+
+The results reveal a fundamental trade-off:
+
+\begin{enumerate}
+    \item \textbf{Community Quality vs. Temporal Smoothness}: There is an inherent tension between detecting high-quality communities and maintaining temporal smoothness. TCDA-NE optimizes for smoothness at the cost of community quality, while OverlappingGNN prioritizes community quality without temporal constraints.
+
+    \item \textbf{Metric Selection Matters}: The original TCDA-NE paper only reported NMI and F1 metrics, which favor their approach. Including modularity and link prediction provides a more complete picture of community detection performance.
+
+    \item \textbf{Application-Dependent Choice}: The choice between models should depend on the application:
+    \begin{itemize}
+        \item For tracking community evolution over time (e.g., monitoring organizational changes), TCDA-NE's temporal smoothness is valuable.
+        \item For understanding community structure at a given time (e.g., identifying functional groups), OverlappingGNN's superior quality is preferable.
+    \end{itemize}
+\end{enumerate}
+
+%==============================================================================
+\section{Discussion}
+%==============================================================================
+
+\subsection{Strengths and Limitations}
+
+\subsubsection{TCDA-NE}
+
+\textbf{Strengths:}
+\begin{itemize}
+    \item Explicit temporal smoothness through evolutionary clustering
+    \item Fast and computationally efficient
+    \item Interpretable factorization (W and G matrices)
+    \item No hyperparameter tuning for neural networks
+\end{itemize}
+
+\textbf{Limitations:}
+\begin{itemize}
+    \item Assumes non-overlapping communities
+    \item Lower community quality as measured by modularity
+    \item Sensitive to initialization
+    \item May over-smooth communities, missing genuine structural changes
+\end{itemize}
+
+\subsubsection{OverlappingGNN}
+
+\textbf{Strengths:}
+\begin{itemize}
+    \item Detects overlapping communities
+    \item Superior community quality
+    \item Flexible architecture (can incorporate node features)
+    \item Better link prediction performance
+\end{itemize}
+
+\textbf{Limitations:}
+\begin{itemize}
+    \item No explicit temporal modeling
+    \item Computationally expensive
+    \item Requires neural network hyperparameter tuning
+    \item May detect different community structures in consecutive snapshots
+\end{itemize}
+
+\subsection{Why Modularity and Link Prediction Matter}
+
+The original TCDA-NE paper did not include modularity and link prediction metrics, focusing only on temporal smoothness (NMI and F1). We argue that these metrics are essential for a complete evaluation:
+
+\begin{enumerate}
+    \item \textbf{Modularity} directly measures community quality by evaluating whether detected communities have dense internal and sparse external connections. High temporal smoothness with low modularity could indicate that the algorithm is simply maintaining poor community assignments over time.
+
+    \item \textbf{Link Prediction} measures the practical utility of community assignments. If communities capture meaningful structure, nodes in the same community should be more likely to form future connections. This is particularly important for applications like recommendation systems and link prediction.
+
+    \item \textbf{NMI and F1} measure temporal consistency but not community quality. A trivial solution that assigns all nodes to the same community would achieve perfect temporal smoothness but meaningless communities.
+\end{enumerate}
+
+\subsection{Future Directions}
+
+Based on my findings, several directions for future work emerge:
+
+\begin{enumerate}
+    \item \textbf{Hybrid Approaches}: Combining the temporal smoothness of TCDA-NE with the representational power of GNNs could yield the best of both worlds.
+
+    \item \textbf{Using Node/Edge Features}:  Many temporal graph datasets contain node/edge features and the NOCD model can handle features really well and I think they can improve community qualities significantly and possibly make the model more robust.
+\end{enumerate}
+
+\end{document}
